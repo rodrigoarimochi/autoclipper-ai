@@ -117,7 +117,8 @@ if st.button("🚀 Gerar Cortes com IA", type="primary", use_container_width=Tru
                 with cols[i]:
                     st.markdown(f"### {clip['title']}")
                     st.caption(f"⏱️ {clip['start']}s até {clip['end']}s")
-                    st.write(f"**Gancho:** *"{clip.get('hook', '')}"*")
+                    hook_text = clip.get('hook', '')
+                    st.write(f"**Gancho:** *{hook_text}*")
                     st.write(f"**Motivo:** {clip.get('reason', '')}")
                     if os.path.exists(out_path):
                         st.video(out_path)
