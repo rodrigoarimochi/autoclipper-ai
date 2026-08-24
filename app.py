@@ -13,7 +13,7 @@ from google.genai import types
 
 
 # ============================================================
-# CONFIGURAÇÃO DO STREAMLIT
+# CONFIGURAÇÃO
 # ============================================================
 
 st.set_page_config(
@@ -21,11 +21,6 @@ st.set_page_config(
     page_icon="✂️",
     layout="wide"
 )
-
-
-# ============================================================
-# TÍTULO
-# ============================================================
 
 st.title("✂️ AutoClipper AI — Gerador de Cortes Inteligentes")
 
@@ -35,7 +30,7 @@ st.markdown(
 
 
 # ============================================================
-# CHAVE GEMINI
+# GEMINI
 # ============================================================
 
 GEMINI_API_KEY = st.secrets.get(
@@ -43,10 +38,6 @@ GEMINI_API_KEY = st.secrets.get(
     os.getenv("GEMINI_API_KEY", "")
 )
 
-
-# ============================================================
-# SIDEBAR
-# ============================================================
 
 with st.sidebar:
 
@@ -59,22 +50,22 @@ with st.sidebar:
         value=2
     )
 
-    if not GEMINI_API_KEY:
+    if GEMINI_API_KEY:
+
+        api_key = GEMINI_API_KEY
+
+        st.success("🔑 Chave de API conectada!")
+
+    else:
 
         api_key = st.text_input(
             "Gemini API Key (Google AI Studio)",
             type="password"
         )
 
-    else:
-
-        api_key = GEMINI_API_KEY
-
-        st.success("🔑 Chave de API conectada!")
-
 
 # ============================================================
-# URL DO YOUTUBE
+# URL
 # ============================================================
 
 video_url = st.text_input(
@@ -84,7 +75,7 @@ video_url = st.text_input(
 
 
 # ============================================================
-# DIRETÓRIO TEMPORÁRIO
+# DIRETÓRIO DOS JOBS
 # ============================================================
 
 BASE_DIR = Path("autoclipper_jobs")
@@ -96,111 +87,51 @@ BASE_DIR.mkdir(
 
 
 # ============================================================
-# VERIFICAR FFMPEG
+# FFMPEG
 # ============================================================
 
 def check_ffmpeg():
 
-    ffmpeg_path = shutil.which("ffmpeg")
+    path = shutil.which("ffmpeg")
 
-    if not ffmpeg_path:
+    if not path:
 
         raise Exception(
-            "FFmpeg não foi encontrado no servidor. "
-            "Verifique o arquivo packages.txt."
+            "FFmpeg não foi encontrado no servidor."
         )
 
-    return ffmpeg_path
+    return path
 
 
 # ============================================================
-# VERIFICAR DENO
+# DENO
 # ============================================================
 
 def check_deno():
 
-    deno_path = shutil.which("deno")
+    # Primeiro tenta PATH
+    path = shutil.which("deno")
 
-    if deno_path:
+    if path:
+        return path
 
-        return deno_path
-
+    # Depois tenta o pacote Python deno
     try:
 
         import deno
 
-        deno_path = deno.find_deno_bin()
+        if hasattr(deno, "find_deno_bin"):
 
-        if deno_path and os.path.exists(deno_path):
+            path = deno.find_deno_bin()
 
-            return deno_path
+            if path and os.path.exists(path):
+
+                return path
 
     except Exception:
         pass
 
     return None
-
-
-# ============================================================
-# MOSTRAR VERSÕES
-# ============================================================
-
-def show_environment():
-
-    try:
-
-        yt_dlp_version = yt_dlp.version.__version__
-
-    except Exception:
-
-        yt_dlp_version = "desconhecida"
-
-    deno_path = check_deno()
-
-    ffmpeg_path = shutil.which("ffmpeg")
-
-    st.write(
-        f"**yt-dlp:** `{yt_dlp_version}`"
-    )
-
-    if deno_path:
-
-        try:
-
-            result = subprocess.run(
-                [deno_path, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=15
-            )
-
-            deno_version = result.stdout.strip()
-
-        except Exception:
-
-            deno_version = "instalado"
-
-        st.write(
-            f"**Deno:** `{deno_version}`"
-        )
-
-    else:
-
-        st.warning(
-            "⚠️ Deno não foi encontrado."
-        )
-
-    if ffmpeg_path:
-
-        st.write(
-            f"**FFmpeg:** `{ffmpeg_path}`"
-        )
-
-    else:
-
-        st.warning(
-            "⚠️ FFmpeg não foi encontrado."
-        )
 
 
 # ============================================================
@@ -212,16 +143,6 @@ def download_youtube_video(
     output_dir
 ):
 
-    """
-    Baixa automaticamente o vídeo do YouTube
-    para o servidor.
-
-    O usuário NÃO precisa fazer upload.
-
-    O vídeo é baixado na melhor qualidade disponível
-    e fica localmente no servidor para Whisper + FFmpeg.
-    """
-
     output_dir = Path(output_dir)
 
     output_dir.mkdir(
@@ -229,37 +150,29 @@ def download_youtube_video(
         exist_ok=True
     )
 
-    output_template = str(
-        output_dir / "%(id)s.%(ext)s"
-    )
-
     deno_path = check_deno()
 
     if not deno_path:
 
         raise Exception(
-            "Deno não foi encontrado. "
-            "O yt-dlp atual precisa de um runtime JavaScript "
-            "para o suporte completo ao YouTube."
+            "Deno não foi encontrado."
         )
 
     st.write(
-        "🔧 Deno encontrado. Preparando yt-dlp..."
+        f"✅ Deno encontrado: `{deno_path}`"
     )
 
-    # --------------------------------------------------------
-    # Configuração principal
-    # --------------------------------------------------------
+    output_template = str(
+        output_dir / "%(id)s.%(ext)s"
+    )
+
+    # ========================================================
+    # CONFIGURAÇÃO DO YT-DLP
+    # ========================================================
 
     ydl_opts = {
 
-        # Melhor vídeo + melhor áudio.
-        #
-        # Se MP4 estiver disponível:
-        #   melhor vídeo MP4 + melhor áudio M4A
-        #
-        # Caso não exista:
-        #   usa o melhor formato disponível.
+        # Melhor vídeo + melhor áudio
         "format": (
             "bestvideo[ext=mp4]+bestaudio[ext=m4a]"
             "/bestvideo+bestaudio"
@@ -291,27 +204,28 @@ def download_youtube_video(
 
         "ignoreerrors": False,
 
-        # Deno é informado explicitamente.
+        # ====================================================
+        # DENO
+        # ====================================================
+
         "js_runtimes": {
-            "deno": deno_path
+            "deno": {
+                "path": deno_path
+            }
         },
 
-        # Não forçamos android/web.
-        #
-        # O yt-dlp atual escolhe os clientes
-        # apropriados.
-        "extractor_args": {
-            "youtube": {
-                "player_client": [
-                    "default"
-                ]
-            }
+        # ====================================================
+        # EJS
+        # ====================================================
+
+        "remote_components": {
+            "ejs": "github"
         }
     }
 
-    # --------------------------------------------------------
-    # Download
-    # --------------------------------------------------------
+    # ========================================================
+    # EXECUTAR DOWNLOAD
+    # ========================================================
 
     try:
 
@@ -344,50 +258,44 @@ def download_youtube_video(
                 f"🎬 Vídeo encontrado: **{title}**"
             )
 
-            # Arquivo esperado após download/merge
-            expected_file = (
+            # =================================================
+            # PROCURAR ARQUIVO FINAL
+            # =================================================
+
+            expected_mp4 = (
                 output_dir /
                 f"{video_id}.mp4"
             )
 
-            # ------------------------------------------------
-            # Procurar o arquivo caso o yt-dlp tenha usado
-            # outra extensão durante o processo.
-            # ------------------------------------------------
-
-            if expected_file.exists():
+            if expected_mp4.exists():
 
                 return str(
-                    expected_file
+                    expected_mp4
                 )
 
-            possible_files = list(
+            files = list(
                 output_dir.glob(
                     f"{video_id}.*"
                 )
             )
 
-            # Remover arquivos parciais
-            possible_files = [
+            files = [
                 f
-                for f in possible_files
-                if not f.name.endswith(
-                    ".part"
-                )
+                for f in files
+                if not f.name.endswith(".part")
             ]
 
-            if not possible_files:
+            if not files:
 
                 raise Exception(
-                    "O yt-dlp informou que o download "
-                    "foi concluído, mas o arquivo não "
-                    "foi encontrado no servidor."
+                    "O download foi iniciado, "
+                    "mas nenhum arquivo foi encontrado."
                 )
 
-            # Priorizar MP4
+            # Prioriza MP4
             mp4_files = [
                 f
-                for f in possible_files
+                for f in files
                 if f.suffix.lower() == ".mp4"
             ]
 
@@ -398,7 +306,7 @@ def download_youtube_video(
                 )
 
             return str(
-                possible_files[0]
+                files[0]
             )
 
     except Exception as e:
@@ -416,13 +324,11 @@ def download_youtube_video(
 @st.cache_resource
 def load_whisper():
 
-    model = WhisperModel(
+    return WhisperModel(
         "tiny",
         device="cpu",
         compute_type="int8"
     )
-
-    return model
 
 
 def transcribe_video(
@@ -436,24 +342,23 @@ def transcribe_video(
         word_timestamps=True
     )
 
-    formatted_blocks = []
+    blocks = []
 
     for segment in segments:
 
         text = segment.text.strip()
 
         if not text:
-
             continue
 
-        formatted_blocks.append(
+        blocks.append(
             f"[{segment.start:.2f}s - "
             f"{segment.end:.2f}s] "
             f"{text}"
         )
 
     transcript = "\n".join(
-        formatted_blocks
+        blocks
     )
 
     if not transcript:
@@ -485,40 +390,24 @@ para TikTok, Instagram Reels e YouTube Shorts.
 
 Analise a transcrição abaixo.
 
-Escolha exatamente {count} cortes.
+Escolha exatamente {count} melhores momentos.
 
 REGRAS:
 
-1. Cada corte deve ter entre 20 e 50 segundos.
+- Cada corte deve ter entre 20 e 50 segundos.
+- Não comece no meio de uma frase.
+- O trecho deve possuir uma ideia completa.
+- Priorize emoção, curiosidade, surpresa,
+  opinião forte, ensinamento, história,
+  conflito ou informação útil.
+- Evite cortes muito parecidos.
+- Use SOMENTE os timestamps existentes.
+- Não invente timestamps.
+- start precisa ser menor que end.
 
-2. O corte deve começar em um momento interessante.
+Retorne SOMENTE JSON.
 
-3. Evite começar no meio de uma frase.
-
-4. O corte deve possuir uma ideia completa.
-
-5. Priorize:
-   - curiosidade
-   - emoção
-   - surpresa
-   - opinião forte
-   - ensinamento
-   - história
-   - conflito
-   - frase de impacto
-   - informação útil
-
-6. Os cortes não devem ser excessivamente parecidos.
-
-7. Use os timestamps presentes na transcrição.
-
-8. Não invente timestamps.
-
-9. O campo start deve ser menor que end.
-
-RETORNE SOMENTE JSON.
-
-Formato obrigatório:
+Formato:
 
 [
   {{
@@ -549,7 +438,7 @@ TRANSCRIÇÃO:
     if not response.text:
 
         raise Exception(
-            "O Gemini não retornou uma resposta."
+            "O Gemini não retornou resposta."
         )
 
     try:
@@ -558,12 +447,12 @@ TRANSCRIÇÃO:
             response.text
         )
 
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
 
         raise Exception(
-            "O Gemini retornou um JSON inválido:\n\n"
+            "O Gemini retornou JSON inválido:\n\n"
             + response.text
-        ) from e
+        )
 
     if not isinstance(
         clips,
@@ -571,10 +460,10 @@ TRANSCRIÇÃO:
     ):
 
         raise Exception(
-            "O Gemini não retornou uma lista de cortes."
+            "Resposta do Gemini não é uma lista."
         )
 
-    valid_clips = []
+    valid = []
 
     for clip in clips:
 
@@ -589,25 +478,22 @@ TRANSCRIÇÃO:
             )
 
             if end <= start:
-
                 continue
 
             duration = end - start
 
-            if duration < 15:
-
+            if duration < 20:
                 continue
 
-            if duration > 60:
-
+            if duration > 50:
                 continue
 
-            valid_clips.append(
+            valid.append(
                 {
                     "title": str(
                         clip.get(
                             "title",
-                            f"Corte {len(valid_clips) + 1}"
+                            f"Corte {len(valid) + 1}"
                         )
                     ),
                     "start": start,
@@ -635,13 +521,13 @@ TRANSCRIÇÃO:
 
             continue
 
-    if not valid_clips:
+    if not valid:
 
         raise Exception(
-            "Nenhum corte válido foi retornado pelo Gemini."
+            "O Gemini não encontrou cortes válidos."
         )
 
-    return valid_clips
+    return valid
 
 
 # ============================================================
@@ -653,18 +539,13 @@ def get_video_duration(
 ):
 
     cmd = [
-
         "ffprobe",
-
         "-v",
         "error",
-
         "-show_entries",
         "format=duration",
-
         "-of",
         "default=noprint_wrappers=1:nokey=1",
-
         video_file
     ]
 
@@ -691,7 +572,7 @@ def get_video_duration(
 
 
 # ============================================================
-# RENDERIZA CORTE VERTICAL
+# RENDERIZA CORTE
 # ============================================================
 
 def render_vertical_clip(
@@ -706,7 +587,7 @@ def render_vertical_clip(
     if duration <= 0:
 
         raise Exception(
-            "Duração inválida do corte."
+            "Duração inválida."
         )
 
     cmd = [
@@ -724,20 +605,12 @@ def render_vertical_clip(
         "-t",
         str(duration),
 
-        # ----------------------------------------------------
-        # FORMATO VERTICAL 9:16
-        # ----------------------------------------------------
-
         "-vf",
         (
             "scale=1080:1920:"
             "force_original_aspect_ratio=increase,"
             "crop=1080:1920"
         ),
-
-        # ----------------------------------------------------
-        # VÍDEO
-        # ----------------------------------------------------
 
         "-c:v",
         "libx264",
@@ -751,19 +624,11 @@ def render_vertical_clip(
         "-pix_fmt",
         "yuv420p",
 
-        # ----------------------------------------------------
-        # ÁUDIO
-        # ----------------------------------------------------
-
         "-c:a",
         "aac",
 
         "-b:a",
         "192k",
-
-        # ----------------------------------------------------
-        # COMPATIBILIDADE WEB
-        # ----------------------------------------------------
 
         "-movflags",
         "+faststart",
@@ -780,38 +645,16 @@ def render_vertical_clip(
 
     if result.returncode != 0:
 
-        error_message = result.stderr
+        error = result.stderr
 
-        if len(error_message) > 5000:
+        if len(error) > 5000:
 
-            error_message = (
-                error_message[-5000:]
-            )
+            error = error[-5000:]
 
         raise Exception(
-            "FFmpeg encontrou um erro:\n\n"
-            + error_message
+            "FFmpeg falhou:\n\n"
+            + error
         )
-
-
-# ============================================================
-# LIMPEZA
-# ============================================================
-
-def cleanup_job(
-    job_dir
-):
-
-    try:
-
-        shutil.rmtree(
-            job_dir,
-            ignore_errors=True
-        )
-
-    except Exception:
-
-        pass
 
 
 # ============================================================
@@ -824,10 +667,6 @@ if st.button(
     use_container_width=True
 ):
 
-    # --------------------------------------------------------
-    # VALIDAÇÕES
-    # --------------------------------------------------------
-
     if not video_url:
 
         st.error(
@@ -839,14 +678,14 @@ if st.button(
     if not api_key:
 
         st.error(
-            "❌ Configure sua chave da API Gemini."
+            "❌ Configure sua chave do Gemini."
         )
 
         st.stop()
 
-    # --------------------------------------------------------
-    # CRIAR JOB INDIVIDUAL
-    # --------------------------------------------------------
+    # ========================================================
+    # JOB INDIVIDUAL
+    # ========================================================
 
     job_dir = Path(
         tempfile.mkdtemp(
@@ -855,62 +694,64 @@ if st.button(
         )
     )
 
-    download_dir = (
-        job_dir /
-        "original"
+    original_dir = (
+        job_dir / "original"
     )
 
-    output_dir = (
-        job_dir /
-        "cortes"
+    clips_dir = (
+        job_dir / "cortes"
     )
 
-    download_dir.mkdir(
+    original_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
-    output_dir.mkdir(
+    clips_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
     status = st.status(
-        "🚀 Iniciando processamento...",
+        "🚀 Processando...",
         expanded=True
     )
 
     try:
 
         # ====================================================
-        # ETAPA 0
+        # 1. VERIFICAÇÃO
         # ====================================================
 
         status.write(
-            "🔧 Verificando FFmpeg e Deno..."
+            "🔧 Verificando FFmpeg..."
         )
 
         check_ffmpeg()
-
-        deno_path = check_deno()
-
-        if not deno_path:
-
-            raise Exception(
-                "Deno não está instalado corretamente."
-            )
 
         status.write(
             "✅ FFmpeg encontrado."
         )
 
         status.write(
-            "✅ Deno encontrado."
+            "🔧 Verificando Deno..."
+        )
+
+        deno_path = check_deno()
+
+        if not deno_path:
+
+            raise Exception(
+                "Deno não foi encontrado."
+            )
+
+        status.write(
+            f"✅ Deno encontrado: `{deno_path}`"
         )
 
 
         # ====================================================
-        # ETAPA 1
+        # 2. DOWNLOAD
         # ====================================================
 
         status.write(
@@ -920,7 +761,7 @@ if st.button(
 
         video_file = download_youtube_video(
             video_url,
-            download_dir
+            original_dir
         )
 
         if not os.path.exists(
@@ -928,25 +769,23 @@ if st.button(
         ):
 
             raise Exception(
-                "O arquivo do vídeo não foi encontrado."
+                "Arquivo de vídeo não encontrado."
             )
 
-        file_size = (
+        size_mb = (
             os.path.getsize(
                 video_file
-            )
-            / (1024 * 1024)
+            ) / 1024 / 1024
         )
 
         status.write(
-            f"✅ Vídeo baixado: "
-            f"`{Path(video_file).name}` "
-            f"({file_size:.1f} MB)"
+            f"✅ Download concluído: "
+            f"{size_mb:.1f} MB"
         )
 
 
         # ====================================================
-        # ETAPA 2
+        # 3. WHISPER
         # ====================================================
 
         status.write(
@@ -963,12 +802,12 @@ if st.button(
 
 
         # ====================================================
-        # ETAPA 3
+        # 4. GEMINI
         # ====================================================
 
         status.write(
-            "🧠 3. Gemini analisando os "
-            "melhores momentos..."
+            "🧠 3. Gemini analisando "
+            "os melhores momentos..."
         )
 
         clips = get_viral_clips(
@@ -978,12 +817,12 @@ if st.button(
         )
 
         status.write(
-            f"✅ {len(clips)} momentos encontrados."
+            f"✅ {len(clips)} cortes encontrados."
         )
 
 
         # ====================================================
-        # VALIDAR DURAÇÃO
+        # 5. AJUSTAR TIMESTAMPS
         # ====================================================
 
         video_duration = get_video_duration(
@@ -1005,37 +844,30 @@ if st.button(
 
                     clip["end"] = video_duration
 
-                if clip["end"] <= clip["start"]:
-
-                    clip["end"] = min(
-                        video_duration,
-                        clip["start"] + 30
-                    )
-
 
         # ====================================================
-        # ETAPA 4
+        # 6. RENDER
         # ====================================================
 
         status.write(
             f"✂️ 4. Renderizando "
-            f"{len(clips)} cortes verticais 9:16..."
+            f"{len(clips)} cortes em 9:16..."
         )
 
-        rendered_clips = []
+        rendered = []
 
-        for index, clip in enumerate(
+        for i, clip in enumerate(
             clips
         ):
 
             output_file = (
-                output_dir /
-                f"corte_{index + 1}.mp4"
+                clips_dir /
+                f"corte_{i + 1}.mp4"
             )
 
             status.write(
-                f"🎬 Renderizando corte "
-                f"{index + 1}/{len(clips)}..."
+                f"🎬 Corte "
+                f"{i + 1}/{len(clips)}..."
             )
 
             render_vertical_clip(
@@ -1048,11 +880,10 @@ if st.button(
             if not output_file.exists():
 
                 raise Exception(
-                    f"O corte {index + 1} "
-                    "não foi criado."
+                    f"Corte {i + 1} não foi criado."
                 )
 
-            rendered_clips.append(
+            rendered.append(
                 (
                     clip,
                     str(output_file)
@@ -1082,17 +913,17 @@ if st.button(
         )
 
         cols = st.columns(
-            len(rendered_clips)
+            len(rendered)
         )
 
-        for index, (
+        for i, (
             clip,
             output_file
         ) in enumerate(
-            rendered_clips
+            rendered
         ):
 
-            with cols[index]:
+            with cols[i]:
 
                 st.markdown(
                     f"### {clip['title']}"
@@ -1104,28 +935,18 @@ if st.button(
                     f"{clip['end']:.1f}s"
                 )
 
-                hook = clip.get(
-                    "hook",
-                    ""
-                )
-
-                reason = clip.get(
-                    "reason",
-                    ""
-                )
-
-                if hook:
+                if clip["hook"]:
 
                     st.write(
                         f"**🎯 Gancho:** "
-                        f"*{hook}*"
+                        f"*{clip['hook']}*"
                     )
 
-                if reason:
+                if clip["reason"]:
 
                     st.write(
                         f"**💡 Motivo:** "
-                        f"{reason}"
+                        f"{clip['reason']}"
                     )
 
                 st.video(
@@ -1138,23 +959,18 @@ if st.button(
                 ) as file:
 
                     st.download_button(
-
                         label=
-                        f"⬇️ Baixar Corte {index + 1}",
-
+                        f"⬇️ Baixar Corte {i + 1}",
                         data=file,
-
                         file_name=
-                        f"corte_{index + 1}.mp4",
-
+                        f"corte_{i + 1}.mp4",
                         mime="video/mp4",
-
                         key=
-                        f"download_{index}"
+                        f"download_{i}"
                     )
 
 
-    except Exception as error:
+    except Exception as e:
 
         status.update(
             label="❌ Erro durante o processamento",
@@ -1163,17 +979,9 @@ if st.button(
         )
 
         st.error(
-            "Ocorreu um erro durante o processamento:"
+            "Corrigimos um erro durante o processamento:"
         )
 
         st.code(
-            str(error)
-        )
-
-        st.warning(
-            "Se o erro for HTTP 403 do YouTube, "
-            "o próximo passo será analisar o log "
-            "completo do yt-dlp para identificar "
-            "se o bloqueio ocorre na extração "
-            "ou no download do formato."
+            str(e)
         )
