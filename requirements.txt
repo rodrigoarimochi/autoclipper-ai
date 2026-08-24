@@ -1,4 +1,5 @@
 streamlit
 faster-whisper
 google-genai
-yt-dlp[default,deno]
+yt-dlp[default]
+deno
