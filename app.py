@@ -3,15 +3,15 @@ import os
 import json
 import subprocess
 import requests
+import re
 from faster_whisper import WhisperModel
 from google import genai
 from google.genai import types
-import yt_dlp
 
 st.set_page_config(page_title="AutoClipper AI", page_icon="✂️", layout="wide")
 
 st.title("✂️ AutoClipper AI — Gerador de Cortes Inteligentes")
-st.markdown("Cole apenas o link do YouTube e gere cortes verticais (9:16) automaticamente com IA.")
+st.markdown("Cole o link do YouTube e gere cortes verticais (9:16) automaticamente com IA.")
 
 # Barra lateral para configurações
 with st.sidebar:
@@ -21,64 +21,79 @@ with st.sidebar:
 
 video_url = st.text_input("🔗 Cole o link do YouTube:", placeholder="https://www.youtube.com/watch?v=...")
 
-def download_video_robust(url, output_path="input_video.mp4"):
-    """
-    Bypass anti-bloqueio 403 do YouTube para servidores em nuvem.
-    """
-    # 1. Tentativa via API de túnel aberta
-    try:
-        cobalt_instances = [
-            "https://api.cobalt.tools/api/json",
-            "https://cobalt-api.kwiatekm.pl/api/json",
-            "https://api.hyper.lol/api/json"
-        ]
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0"
-        }
-        payload = {
-            "url": url,
-            "vQuality": "720",
-            "vCodec": "h264"
-        }
-        for instance in cobalt_instances:
-            try:
-                res = requests.post(instance, json=payload, headers=headers, timeout=8)
-                if res.status_code == 200:
-                    data = res.json()
-                    direct_url = data.get("url")
-                    if direct_url:
-                        v_res = requests.get(direct_url, stream=True, timeout=60)
-                        if v_res.status_code == 200:
-                            with open(output_path, "wb") as f:
-                                for chunk in v_res.iter_content(chunk_size=8192):
-                                    f.write(chunk)
-                            return output_path
-            except Exception:
-                continue
-    except Exception:
-        pass
+def extract_video_id(url):
+    pattern = r'(?:v=|/|youtu\.be/)([0-9A-Za-z_-]{11})'
+    match = re.search(pattern, url)
+    return match.group(1) if match else None
 
-    # 2. Fallback via yt-dlp emulando iOS/Mobile
-    ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': output_path,
-        'overwrites': True,
-        'quiet': True,
-        'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['ios', 'mweb', 'android']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1'
+def download_youtube_via_proxy(url, output_path="input_video.mp4"):
+    """
+    Bypass anti-bloqueio 403 usando streams diretos de CDN.
+    """
+    video_id = extract_video_id(url)
+    if not video_id:
+        raise Exception("ID do vídeo inválido. Verifique o link fornecido.")
+
+    instances = [
+        f"https://api.piped.privacydev.net/streams/{video_id}",
+        f"https://pipedapi.kavin.rocks/streams/{video_id}",
+        f"https://api.piped.yt/streams/{video_id}",
+        f"https://inv.tux.pizza/api/v1/videos/{video_id}",
+        f"https://invidious.nerdvpn.de/api/v1/videos/{video_id}"
+    ]
+
+    download_stream_url = None
+
+    for api_endpoint in instances:
+        try:
+            r = requests.get(api_endpoint, timeout=6)
+            if r.status_code == 200:
+                data = r.json()
+                
+                # Resolução Piped API
+                if "videoStreams" in data:
+                    for s in data["videoStreams"]:
+                        if s.get("format") == "MPEG_4" and s.get("videoOnly") is False:
+                            download_stream_url = s.get("url")
+                            break
+                    if not download_stream_url and len(data["videoStreams"]) > 0:
+                        download_stream_url = data["videoStreams"][0].get("url")
+
+                # Resolução Invidious API
+                elif "formatStreams" in data:
+                    for s in data["formatStreams"]:
+                        if "video/mp4" in s.get("type", ""):
+                            download_stream_url = s.get("url")
+                            break
+                
+                if download_stream_url:
+                    break
+        except Exception:
+            continue
+
+    if not download_stream_url:
+        import yt_dlp
+        ydl_opts = {
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'outtmpl': output_path,
+            'overwrites': True,
+            'quiet': True,
+            'extractor_args': {'youtube': {'player_client': ['tv_embedded', 'android']}}
         }
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-    return output_path
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return output_path
+
+    # Baixa o fluxo sem restrição de IP
+    stream_res = requests.get(download_stream_url, stream=True, timeout=120)
+    if stream_res.status_code == 200:
+        with open(output_path, "wb") as f:
+            for chunk in stream_res.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+        return output_path
+    else:
+        raise Exception(f"Falha ao baixar vídeo pela CDN (Status: {stream_res.status_code})")
 
 def transcribe_audio(video_path):
     model = WhisperModel("tiny", device="cpu", compute_type="int8")
@@ -140,8 +155,8 @@ if st.button("🚀 Gerar Cortes com IA", type="primary", use_container_width=Tru
         try:
             video_file = "downloaded_video.mp4"
             
-            status.write("📥 1. Baixando vídeo com bypass automático...")
-            download_video_robust(video_url, video_file)
+            status.write("📥 1. Baixando vídeo via stream direto...")
+            download_youtube_via_proxy(video_url, video_file)
             
             status.write("🎙️ 2. Transcrevendo áudio com Whisper...")
             transcript = transcribe_audio(video_file)
@@ -149,7 +164,7 @@ if st.button("🚀 Gerar Cortes com IA", type="primary", use_container_width=Tru
             status.write("🧠 3. IA identificando os momentos virais...")
             clips = get_viral_clips(transcript, api_key, count=num_clips)
             
-            status.write(f"✂️ 4. Renderizando {len(clips)} cortes em 9:16...")
+            status.write(f"✂️ 4. Renderizando {len(clips)} cortes verticais em 9:16...")
             os.makedirs("cortes", exist_ok=True)
             
             status.update(label="✅ Todos os cortes foram finalizados com sucesso!", state="complete", expanded=False)
