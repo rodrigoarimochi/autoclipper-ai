@@ -12,26 +12,33 @@ st.set_page_config(page_title="AutoClipper AI", page_icon="✂️", layout="wide
 st.title("✂️ AutoClipper AI — Gerador de Cortes Inteligentes")
 st.markdown("Cole o link do YouTube e gere cortes verticais (9:16) automaticamente com IA.")
 
+# Carrega a chave dos Secrets ou permite digitar manualmente
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
+
 with st.sidebar:
     st.header("⚙️ Configurações")
-    api_key = st.text_input("Gemini API Key (Google AI Studio)", type="password", help="Pegue gratuitamente em aistudio.google.com")
     num_clips = st.slider("Quantidade de cortes", min_value=1, max_value=5, value=2)
+    if not GEMINI_API_KEY:
+        api_key = st.text_input("Gemini API Key (Google AI Studio)", type="password")
+    else:
+        api_key = GEMINI_API_KEY
+        st.success("🔑 Chave de API conectada!")
 
 video_url = st.text_input("🔗 Cole o link do YouTube:", placeholder="https://www.youtube.com/watch?v=...")
 
 def download_audio_only(url, output_path="audio_temp.m4a"):
     """
-    Baixa apenas a faixa de áudio leve. O YouTube não aplica bloqueio 403 para este fluxo.
+    Baixa o stream de áudio disponível com seletor universal resiliente.
     """
     ydl_opts = {
-        'format': 'ba/b[ext=m4a]/bestaudio',
+        'format': 'bestaudio/best',
         'outtmpl': output_path,
         'overwrites': True,
         'quiet': True,
         'no_warnings': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android']
+                'player_client': ['android', 'web']
             }
         }
     }
@@ -41,21 +48,25 @@ def download_audio_only(url, output_path="audio_temp.m4a"):
 
 def get_direct_video_stream(url):
     """
-    Obtém a URL do stream de vídeo/áudio combinados diretamente para o FFmpeg cortar na nuvem.
+    Obtém a URL do stream de vídeo/áudio direto para o FFmpeg cortar.
     """
     ydl_opts = {
-        'format': 'best[ext=mp4]/best',
+        'format': 'bestvideo+bestaudio/best',
         'quiet': True,
         'no_warnings': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android']
+                'player_client': ['android', 'web']
             }
         }
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        return info['url']
+        if 'url' in info:
+            return info['url']
+        elif 'formats' in info and len(info['formats']) > 0:
+            return info['formats'][-1]['url']
+        raise Exception("Não foi possível resolver o stream direto deste vídeo.")
 
 def transcribe_audio(audio_path):
     model = WhisperModel("tiny", device="cpu", compute_type="int8")
@@ -111,21 +122,21 @@ if st.button("🚀 Gerar Cortes com IA", type="primary", use_container_width=Tru
     if not video_url:
         st.error("Por favor, cole o link do YouTube.")
     elif not api_key:
-        st.error("Por favor, insira sua chave gratuita do Gemini na barra lateral.")
+        st.error("Por favor, insira sua chave do Gemini na barra lateral ou configure nos Secrets.")
     else:
         status = st.status("Processando vídeo do YouTube...", expanded=True)
         try:
-            status.write("📥 1. Extraindo áudio direto do YouTube...")
+            status.write("📥 1. Extraindo áudio do vídeo...")
             audio_file = "audio_temp.m4a"
             download_audio_only(video_url, audio_file)
             
             status.write("🎙️ 2. Transcrevendo áudio com Whisper...")
             transcript = transcribe_audio(audio_file)
             
-            status.write("🧠 3. IA identificando os melhores momentos...")
+            status.write("🧠 3. IA identificando os melhores momentos virais...")
             clips = get_viral_clips(transcript, api_key, count=num_clips)
             
-            status.write("🌐 4. Obtendo stream de vídeo HD...")
+            status.write("🌐 4. Obtendo stream de vídeo...")
             stream_url = get_direct_video_stream(video_url)
             
             status.write(f"✂️ 5. Renderizando {len(clips)} cortes verticais em 9:16...")
