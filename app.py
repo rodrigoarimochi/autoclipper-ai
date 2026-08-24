@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import json
 import subprocess
+import requests
 from faster_whisper import WhisperModel
 from google import genai
 from google.genai import types
@@ -10,26 +11,56 @@ import yt_dlp
 st.set_page_config(page_title="AutoClipper AI", page_icon="✂️", layout="wide")
 
 st.title("✂️ AutoClipper AI — Gerador de Cortes Inteligentes")
-st.markdown("Transforme vídeos em cortes virais verticais (9:16) automaticamente com IA.")
+st.markdown("Cole apenas o link do YouTube e gere cortes verticais (9:16) automaticamente com IA.")
 
 # Barra lateral para configurações
 with st.sidebar:
     st.header("⚙️ Configurações")
     api_key = st.text_input("Gemini API Key (Google AI Studio)", type="password", help="Pegue gratuitamente em aistudio.google.com")
     num_clips = st.slider("Quantidade de cortes", min_value=1, max_value=5, value=2)
-    st.info("Dica: Se o YouTube bloquear algum link, use a aba de upload direto.")
 
-# Abas de entrada: Link ou Upload direto
-tab1, tab2 = st.tabs(["🔗 Link do YouTube", "📁 Upload de Arquivo MP4"])
+video_url = st.text_input("🔗 Cole o link do YouTube:", placeholder="https://www.youtube.com/watch?v=...")
 
-with tab1:
-    video_url = st.text_input("Cole o link do YouTube:", placeholder="https://www.youtube.com/watch?v=...")
+def download_video_robust(url, output_path="input_video.mp4"):
+    """
+    Bypass anti-bloqueio 403 do YouTube para servidores em nuvem.
+    """
+    # 1. Tentativa via API de túnel aberta
+    try:
+        cobalt_instances = [
+            "https://api.cobalt.tools/api/json",
+            "https://cobalt-api.kwiatekm.pl/api/json",
+            "https://api.hyper.lol/api/json"
+        ]
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0"
+        }
+        payload = {
+            "url": url,
+            "vQuality": "720",
+            "vCodec": "h264"
+        }
+        for instance in cobalt_instances:
+            try:
+                res = requests.post(instance, json=payload, headers=headers, timeout=8)
+                if res.status_code == 200:
+                    data = res.json()
+                    direct_url = data.get("url")
+                    if direct_url:
+                        v_res = requests.get(direct_url, stream=True, timeout=60)
+                        if v_res.status_code == 200:
+                            with open(output_path, "wb") as f:
+                                for chunk in v_res.iter_content(chunk_size=8192):
+                                    f.write(chunk)
+                            return output_path
+            except Exception:
+                continue
+    except Exception:
+        pass
 
-with tab2:
-    uploaded_file = st.file_uploader("Ou envie um vídeo do seu computador/celular:", type=["mp4", "mov", "mkv"])
-
-def download_video(url, output_path="input_video.mp4"):
-    # Configuração de bypass para contornar o erro 403 Forbidden do YouTube
+    # 2. Fallback via yt-dlp emulando iOS/Mobile
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
         'outtmpl': output_path,
@@ -38,11 +69,11 @@ def download_video(url, output_path="input_video.mp4"):
         'no_warnings': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web']
+                'player_client': ['ios', 'mweb', 'android']
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1'
         }
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -100,30 +131,25 @@ def render_vertical_clip(input_video, start, end, output_file):
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 if st.button("🚀 Gerar Cortes com IA", type="primary", use_container_width=True):
-    if not api_key:
+    if not video_url:
+        st.error("Por favor, cole o link do YouTube.")
+    elif not api_key:
         st.error("Por favor, insira sua chave gratuita do Gemini na barra lateral.")
-    elif not video_url and not uploaded_file:
-        st.error("Por favor, insira o link do YouTube ou faça upload de um vídeo.")
     else:
-        status = st.status("Processando vídeo...", expanded=True)
+        status = st.status("Processando vídeo do YouTube...", expanded=True)
         try:
             video_file = "downloaded_video.mp4"
             
-            if uploaded_file is not None:
-                status.write("📥 1. Carregando vídeo enviado...")
-                with open(video_file, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-            else:
-                status.write("📥 1. Baixando vídeo do YouTube com bypass de segurança...")
-                download_video(video_url, video_file)
+            status.write("📥 1. Baixando vídeo com bypass automático...")
+            download_video_robust(video_url, video_file)
             
             status.write("🎙️ 2. Transcrevendo áudio com Whisper...")
             transcript = transcribe_audio(video_file)
             
-            status.write("🧠 3. IA analisando ganchos e momentos virais...")
+            status.write("🧠 3. IA identificando os momentos virais...")
             clips = get_viral_clips(transcript, api_key, count=num_clips)
             
-            status.write(f"✂️ 4. Renderizando {len(clips)} cortes verticais em 9:16...")
+            status.write(f"✂️ 4. Renderizando {len(clips)} cortes em 9:16...")
             os.makedirs("cortes", exist_ok=True)
             
             status.update(label="✅ Todos os cortes foram finalizados com sucesso!", state="complete", expanded=False)
