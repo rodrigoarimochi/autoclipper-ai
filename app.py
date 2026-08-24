@@ -1,16 +1,21 @@
-import streamlit as st
 import os
 import json
-import subprocess
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
+import streamlit as st
 import yt_dlp
+
 from faster_whisper import WhisperModel
 from google import genai
 from google.genai import types
 
+
+# ============================================================
+# CONFIGURAÇÃO
+# ============================================================
 
 st.set_page_config(
     page_title="AutoClipper AI",
@@ -18,15 +23,14 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("✂️ AutoClipper AI — Gerador de Cortes Inteligentes")
-
-st.markdown(
-    "Cole o link do YouTube e gere cortes verticais (9:16) automaticamente com IA."
+st.title("✂️ AutoClipper AI")
+st.caption(
+    "Cole um link do YouTube e gere cortes verticais automaticamente."
 )
 
 
 # ============================================================
-# GEMINI
+# CONFIGURAÇÕES
 # ============================================================
 
 GEMINI_API_KEY = st.secrets.get(
@@ -40,45 +44,33 @@ with st.sidebar:
 
     num_clips = st.slider(
         "Quantidade de cortes",
-        min_value=1,
-        max_value=5,
-        value=2
+        1,
+        5,
+        2
     )
 
     if GEMINI_API_KEY:
-
         api_key = GEMINI_API_KEY
-
-        st.success("🔑 Chave de API conectada!")
-
+        st.success("🔑 Gemini conectado")
     else:
-
         api_key = st.text_input(
-            "Gemini API Key (Google AI Studio)",
+            "Gemini API Key",
             type="password"
         )
 
 
-# ============================================================
-# URL
-# ============================================================
-
 video_url = st.text_input(
-    "🔗 Cole o link do YouTube:",
+    "🔗 Link do YouTube",
     placeholder="https://www.youtube.com/watch?v=..."
 )
 
 
 # ============================================================
-# DIRETÓRIO
+# DIRETÓRIOS
 # ============================================================
 
 BASE_DIR = Path("autoclipper_jobs")
-
-BASE_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
+BASE_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
@@ -87,15 +79,14 @@ BASE_DIR.mkdir(
 
 def check_ffmpeg():
 
-    path = shutil.which("ffmpeg")
+    ffmpeg = shutil.which("ffmpeg")
 
-    if not path:
-
-        raise Exception(
-            "FFmpeg não foi encontrado."
+    if not ffmpeg:
+        raise RuntimeError(
+            "FFmpeg não encontrado no servidor."
         )
 
-    return path
+    return ffmpeg
 
 
 # ============================================================
@@ -104,40 +95,21 @@ def check_ffmpeg():
 
 def check_deno():
 
-    path = shutil.which("deno")
+    deno = shutil.which("deno")
 
-    if path:
-
-        return path
-
-    try:
-
-        import deno
-
-        if hasattr(deno, "find_deno_bin"):
-
-            path = deno.find_deno_bin()
-
-            if path and os.path.exists(path):
-
-                return path
-
-    except Exception:
-
-        pass
+    if deno:
+        return deno
 
     return None
 
 
 # ============================================================
-# PROGRESSO DO DOWNLOAD
+# PROGRESSO
 # ============================================================
 
 def download_progress(data):
 
-    status = data.get("status")
-
-    if status == "downloading":
+    if data["status"] == "downloading":
 
         percent = data.get(
             "_percent_str",
@@ -155,15 +127,14 @@ def download_progress(data):
         )
 
         st.write(
-            f"📥 Download: {percent} "
-            f"| Velocidade: {speed} "
-            f"| ETA: {eta}"
+            f"📥 {percent} | "
+            f"{speed} | ETA {eta}"
         )
 
-    elif status == "finished":
+    elif data["status"] == "finished":
 
         st.write(
-            "✅ Download do vídeo concluído."
+            "✅ Download concluído."
         )
 
 
@@ -171,10 +142,7 @@ def download_progress(data):
 # DOWNLOAD YOUTUBE
 # ============================================================
 
-def download_youtube_video(
-    url,
-    output_dir
-):
+def download_youtube(url, output_dir):
 
     output_dir = Path(output_dir)
 
@@ -183,16 +151,15 @@ def download_youtube_video(
         exist_ok=True
     )
 
-    deno_path = check_deno()
+    deno = check_deno()
 
-    if not deno_path:
-
-        raise Exception(
-            "Deno não foi encontrado."
+    if not deno:
+        raise RuntimeError(
+            "Deno não encontrado."
         )
 
     st.write(
-        f"✅ Deno encontrado: `{deno_path}`"
+        f"✅ Deno: `{deno}`"
     )
 
     output_template = str(
@@ -200,32 +167,43 @@ def download_youtube_video(
     )
 
     # ========================================================
-    # CONFIGURAÇÃO SIMPLIFICADA
+    # IMPORTANTE
+    #
+    # Não forçamos MP4.
+    #
+    # O YouTube normalmente disponibiliza:
+    #
+    # vídeo separado
+    # +
+    # áudio separado
+    #
+    # O FFmpeg junta os dois.
     # ========================================================
 
     ydl_opts = {
 
-        # IMPORTANTE:
-        # Primeiro tenta um único MP4.
-        # Isso evita baixar vídeo + áudio separadamente.
         "format": (
-            "best[ext=mp4]"
-            "/best"
+            "bestvideo*+bestaudio/"
+            "best"
         ),
 
         "outtmpl": output_template,
+
+        "merge_output_format": "mp4",
 
         "noplaylist": True,
 
         "overwrites": True,
 
-        "retries": 3,
+        "retries": 5,
 
-        "fragment_retries": 3,
+        "fragment_retries": 5,
 
-        "extractor_retries": 3,
+        "extractor_retries": 5,
 
         "socket_timeout": 30,
+
+        "concurrent_fragment_downloads": 1,
 
         "quiet": False,
 
@@ -233,19 +211,20 @@ def download_youtube_video(
 
         "ignoreerrors": False,
 
-        # Deno
+        # ====================================================
+        # DENO CORRETO
+        # ====================================================
+
         "js_runtimes": {
             "deno": {
-                "path": deno_path
+                "path": deno
             }
         },
 
-        # EJS
         "remote_components": {
             "ejs": "github"
         },
 
-        # Mostrar progresso
         "progress_hooks": [
             download_progress
         ]
@@ -254,7 +233,7 @@ def download_youtube_video(
     try:
 
         st.write(
-            "🔎 Consultando o YouTube..."
+            "🔎 Obtendo informações do vídeo..."
         )
 
         with yt_dlp.YoutubeDL(
@@ -267,15 +246,11 @@ def download_youtube_video(
             )
 
             if not info:
-
-                raise Exception(
-                    "O YouTube não retornou dados."
+                raise RuntimeError(
+                    "O YouTube não retornou informações."
                 )
 
-            video_id = info.get(
-                "id",
-                "video"
-            )
+            video_id = info["id"]
 
             title = info.get(
                 "title",
@@ -283,47 +258,65 @@ def download_youtube_video(
             )
 
             st.write(
-                f"🎬 Vídeo: **{title}**"
+                f"🎬 **{title}**"
             )
 
-            # Procurar arquivo
-            files = list(
-                output_dir.glob(
-                    f"{video_id}.*"
-                )
+            # ------------------------------------------------
+            # Procurar MP4 final
+            # ------------------------------------------------
+
+            mp4 = output_dir / (
+                f"{video_id}.mp4"
             )
+
+            if mp4.exists():
+                return str(mp4)
+
+            # ------------------------------------------------
+            # Procurar qualquer arquivo baixado
+            # ------------------------------------------------
 
             files = [
-                f for f in files
-                if not f.name.endswith(".part")
+                p for p in output_dir.glob(
+                    f"{video_id}.*"
+                )
+                if not p.name.endswith(".part")
             ]
 
             if not files:
 
-                raise Exception(
-                    "O yt-dlp terminou, "
-                    "mas o arquivo não foi encontrado."
+                raise RuntimeError(
+                    "O yt-dlp não criou nenhum arquivo."
                 )
 
-            # Priorizar MP4
-            mp4_files = [
-                f for f in files
-                if f.suffix.lower() == ".mp4"
+            # ------------------------------------------------
+            # Se houver apenas um arquivo, usar ele.
+            # ------------------------------------------------
+
+            if len(files) == 1:
+                return str(files[0])
+
+            # ------------------------------------------------
+            # Caso o merge não tenha ocorrido,
+            # localizar vídeo e áudio.
+            # ------------------------------------------------
+
+            video_files = [
+                p for p in files
+                if p.suffix.lower()
+                in [".mp4", ".webm", ".mkv"]
             ]
 
-            if mp4_files:
-
-                return str(
-                    mp4_files[0]
+            if not video_files:
+                raise RuntimeError(
+                    "Não foi possível localizar o vídeo baixado."
                 )
 
-            return str(
-                files[0]
-            )
+            return str(video_files[0])
 
     except Exception as e:
 
-        raise Exception(
+        raise RuntimeError(
             "Falha no download do YouTube:\n\n"
             + str(e)
         )
@@ -334,7 +327,7 @@ def download_youtube_video(
 # ============================================================
 
 @st.cache_resource
-def load_whisper():
+def get_whisper():
 
     return WhisperModel(
         "tiny",
@@ -343,94 +336,82 @@ def load_whisper():
     )
 
 
-def transcribe_video(
-    video_path
-):
+def transcribe(video):
 
-    model = load_whisper()
+    model = get_whisper()
 
     segments, info = model.transcribe(
-        video_path,
+        video,
         word_timestamps=True
     )
 
-    blocks = []
+    result = []
 
     for segment in segments:
 
         text = segment.text.strip()
 
-        if not text:
+        if text:
 
-            continue
+            result.append(
+                f"[{segment.start:.2f}s - "
+                f"{segment.end:.2f}s] "
+                f"{text}"
+            )
 
-        blocks.append(
-            f"[{segment.start:.2f}s - "
-            f"{segment.end:.2f}s] "
-            f"{text}"
+    if not result:
+
+        raise RuntimeError(
+            "Não foi possível gerar a transcrição."
         )
 
-    transcript = "\n".join(
-        blocks
-    )
-
-    if not transcript:
-
-        raise Exception(
-            "Whisper não encontrou fala."
-        )
-
-    return transcript
+    return "\n".join(result)
 
 
 # ============================================================
 # GEMINI
 # ============================================================
 
-def get_viral_clips(
+def find_clips(
     transcript,
-    gemini_key,
-    count
+    key,
+    quantity
 ):
 
     client = genai.Client(
-        api_key=gemini_key
+        api_key=key
     )
 
     prompt = f"""
-Você é um editor profissional de vídeos virais
-para TikTok, Instagram Reels e YouTube Shorts.
+Você é um editor profissional de vídeos virais.
 
-Analise a transcrição abaixo.
+Analise a transcrição abaixo e escolha
+os {quantity} melhores cortes para:
 
-Escolha exatamente {count} melhores momentos.
+TikTok
+Instagram Reels
+YouTube Shorts
 
-Cada corte deve ter entre 20 e 50 segundos.
+REGRAS:
 
-Priorize:
-
-- curiosidade
-- emoção
-- surpresa
-- opinião forte
-- ensinamento
-- história
-- conflito
-- informação útil
-
-Não comece no meio de uma frase.
-
-Não invente timestamps.
+1. Cada corte deve ter entre 20 e 50 segundos.
+2. O início deve fazer sentido.
+3. O final deve completar a ideia.
+4. Priorize emoção, curiosidade,
+   surpresa, conflito, ensinamento
+   ou opinião forte.
+5. Não invente timestamps.
+6. Use somente os timestamps da transcrição.
 
 Retorne SOMENTE JSON:
 
 [
   {{
-    "title": "Título chamativo",
-    "start": 10.5,
-    "end": 42.0,
-    "hook": "Frase de impacto inicial",
-    "reason": "Por que esse trecho tem potencial"
+    "title": "Título",
+    "start": 10.0,
+    "end": 40.0,
+    "hook": "Gancho",
+    "reason": "Motivo"
   }}
 ]
 
@@ -451,46 +432,49 @@ TRANSCRIÇÃO:
     )
 
     if not response.text:
-
-        raise Exception(
-            "Gemini não retornou resposta."
+        raise RuntimeError(
+            "Gemini não retornou dados."
         )
 
-    clips = json.loads(
+    data = json.loads(
         response.text
     )
 
-    valid = []
+    clips = []
 
-    for clip in clips:
+    for item in data:
 
         try:
 
             start = float(
-                clip["start"]
+                item["start"]
             )
 
             end = float(
-                clip["end"]
+                item["end"]
             )
 
             duration = end - start
 
-            if 20 <= duration <= 50:
+            if (
+                duration >= 20
+                and duration <= 50
+                and end > start
+            ):
 
-                valid.append(
+                clips.append(
                     {
-                        "title": clip.get(
+                        "title": item.get(
                             "title",
-                            f"Corte {len(valid)+1}"
+                            "Corte"
                         ),
                         "start": start,
                         "end": end,
-                        "hook": clip.get(
+                        "hook": item.get(
                             "hook",
                             ""
                         ),
-                        "reason": clip.get(
+                        "reason": item.get(
                             "reason",
                             ""
                         )
@@ -498,69 +482,30 @@ TRANSCRIÇÃO:
                 )
 
         except Exception:
-
             continue
 
-    if not valid:
-
-        raise Exception(
+    if not clips:
+        raise RuntimeError(
             "Nenhum corte válido foi encontrado."
         )
 
-    return valid
+    return clips[:quantity]
 
 
 # ============================================================
-# DURAÇÃO
+# FFMPEG
 # ============================================================
 
-def get_video_duration(
-    video_file
-):
-
-    cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        video_file
-    ]
-
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-
-    try:
-
-        return float(
-            result.stdout.strip()
-        )
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# RENDER
-# ============================================================
-
-def render_vertical_clip(
-    video_file,
+def create_clip(
+    source,
     start,
     end,
-    output_file
+    destination
 ):
 
     duration = end - start
 
-    cmd = [
+    command = [
 
         "ffmpeg",
 
@@ -570,7 +515,7 @@ def render_vertical_clip(
         str(start),
 
         "-i",
-        video_file,
+        source,
 
         "-t",
         str(duration),
@@ -603,11 +548,11 @@ def render_vertical_clip(
         "-movflags",
         "+faststart",
 
-        output_file
+        str(destination)
     ]
 
     result = subprocess.run(
-        cmd,
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -615,13 +560,14 @@ def render_vertical_clip(
 
     if result.returncode != 0:
 
-        raise Exception(
-            result.stderr[-5000:]
+        raise RuntimeError(
+            "FFmpeg falhou:\n\n"
+            + result.stderr[-5000:]
         )
 
 
 # ============================================================
-# BOTÃO
+# EXECUÇÃO
 # ============================================================
 
 if st.button(
@@ -633,7 +579,7 @@ if st.button(
     if not video_url:
 
         st.error(
-            "❌ Cole o link do YouTube."
+            "Cole o link do YouTube."
         )
 
         st.stop()
@@ -641,39 +587,27 @@ if st.button(
     if not api_key:
 
         st.error(
-            "❌ Configure a chave Gemini."
+            "Informe a chave do Gemini."
         )
 
         st.stop()
 
-    # ========================================================
-    # JOB
-    # ========================================================
+    # --------------------------------------------------------
+    # Criar job
+    # --------------------------------------------------------
 
-    job_dir = Path(
+    job = Path(
         tempfile.mkdtemp(
             prefix="job_",
             dir=BASE_DIR
         )
     )
 
-    original_dir = (
-        job_dir / "original"
-    )
+    original = job / "original"
+    cortes = job / "cortes"
 
-    clips_dir = (
-        job_dir / "cortes"
-    )
-
-    original_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    clips_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    original.mkdir()
+    cortes.mkdir()
 
     status = st.status(
         "🚀 Processando...",
@@ -682,9 +616,9 @@ if st.button(
 
     try:
 
-        # ====================================================
-        # FFMPEG
-        # ====================================================
+        # ----------------------------------------------------
+        # 1
+        # ----------------------------------------------------
 
         status.write(
             "🔧 Verificando FFmpeg..."
@@ -696,133 +630,117 @@ if st.button(
             "✅ FFmpeg encontrado."
         )
 
-
-        # ====================================================
-        # DENO
-        # ====================================================
+        # ----------------------------------------------------
+        # 2
+        # ----------------------------------------------------
 
         status.write(
             "🔧 Verificando Deno..."
         )
 
-        deno_path = check_deno()
+        deno = check_deno()
 
-        if not deno_path:
-
-            raise Exception(
+        if not deno:
+            raise RuntimeError(
                 "Deno não encontrado."
             )
 
         status.write(
-            f"✅ Deno encontrado: `{deno_path}`"
+            f"✅ Deno encontrado: `{deno}`"
         )
 
-
-        # ====================================================
-        # DOWNLOAD
-        # ====================================================
+        # ----------------------------------------------------
+        # 3
+        # ----------------------------------------------------
 
         status.write(
-            "📥 1. Baixando automaticamente "
-            "o vídeo do YouTube..."
+            "📥 1. Baixando vídeo do YouTube..."
         )
 
-        video_file = download_youtube_video(
+        video = download_youtube(
             video_url,
-            original_dir
-        )
-
-        size_mb = (
-            os.path.getsize(
-                video_file
-            ) / 1024 / 1024
+            original
         )
 
         status.write(
-            f"✅ Vídeo baixado: "
-            f"{size_mb:.1f} MB"
+            "✅ Vídeo baixado com sucesso."
         )
 
-
-        # ====================================================
-        # WHISPER
-        # ====================================================
+        # ----------------------------------------------------
+        # 4
+        # ----------------------------------------------------
 
         status.write(
-            "🎙️ 2. Transcrevendo áudio..."
+            "🎙️ 2. Transcrevendo com Whisper..."
         )
 
-        transcript = transcribe_video(
-            video_file
+        transcript = transcribe(
+            video
         )
 
         status.write(
             "✅ Transcrição concluída."
         )
 
-
-        # ====================================================
-        # GEMINI
-        # ====================================================
+        # ----------------------------------------------------
+        # 5
+        # ----------------------------------------------------
 
         status.write(
-            "🧠 3. IA identificando "
-            "os melhores momentos..."
+            "🧠 3. IA escolhendo os melhores cortes..."
         )
 
-        clips = get_viral_clips(
+        clips = find_clips(
             transcript,
             api_key,
             num_clips
         )
 
         status.write(
-            f"✅ {len(clips)} cortes encontrados."
+            f"✅ {len(clips)} cortes selecionados."
         )
 
-
-        # ====================================================
-        # RENDER
-        # ====================================================
+        # ----------------------------------------------------
+        # 6
+        # ----------------------------------------------------
 
         status.write(
-            "✂️ 4. Gerando cortes verticais..."
+            "✂️ 4. Renderizando cortes verticais..."
         )
 
-        rendered = []
+        generated = []
 
-        for i, clip in enumerate(
+        for index, clip in enumerate(
             clips
         ):
 
-            output_file = (
-                clips_dir /
-                f"corte_{i+1}.mp4"
+            output = (
+                cortes /
+                f"corte_{index + 1}.mp4"
             )
 
             status.write(
-                f"🎬 Renderizando "
-                f"{i+1}/{len(clips)}..."
+                f"🎬 Corte "
+                f"{index + 1}/{len(clips)}..."
             )
 
-            render_vertical_clip(
-                video_file,
+            create_clip(
+                video,
                 clip["start"],
                 clip["end"],
-                str(output_file)
+                output
             )
 
-            rendered.append(
+            generated.append(
                 (
                     clip,
-                    str(output_file)
+                    output
                 )
             )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # FINAL
-        # ====================================================
+        # ----------------------------------------------------
 
         status.update(
             label="✅ Cortes finalizados!",
@@ -830,67 +748,62 @@ if st.button(
             expanded=False
         )
 
-
         st.divider()
 
         st.subheader(
-            "🎉 Seus Cortes Prontos"
+            "🎉 Seus Cortes"
         )
 
-        cols = st.columns(
-            len(rendered)
+        columns = st.columns(
+            len(generated)
         )
 
-        for i, (
+        for index, (
             clip,
-            output_file
+            output
         ) in enumerate(
-            rendered
+            generated
         ):
 
-            with cols[i]:
+            with columns[index]:
 
                 st.markdown(
                     f"### {clip['title']}"
                 )
 
                 st.caption(
-                    f"⏱️ "
                     f"{clip['start']:.1f}s → "
                     f"{clip['end']:.1f}s"
                 )
 
-                if clip["hook"]:
+                st.write(
+                    f"**🎯 Gancho:** "
+                    f"{clip['hook']}"
+                )
 
-                    st.write(
-                        f"**🎯 Gancho:** "
-                        f"*{clip['hook']}*"
-                    )
-
-                if clip["reason"]:
-
-                    st.write(
-                        f"**💡 Motivo:** "
-                        f"{clip['reason']}"
-                    )
+                st.write(
+                    f"**💡 Motivo:** "
+                    f"{clip['reason']}"
+                )
 
                 st.video(
-                    output_file
+                    str(output)
                 )
 
                 with open(
-                    output_file,
+                    output,
                     "rb"
-                ) as f:
+                ) as file:
 
                     st.download_button(
-                        f"⬇️ Baixar Corte {i+1}",
-                        f,
-                        file_name=f"corte_{i+1}.mp4",
+                        "⬇️ Baixar corte",
+                        data=file,
+                        file_name=
+                        f"corte_{index + 1}.mp4",
                         mime="video/mp4",
-                        key=f"download_{i}"
+                        key=
+                        f"download_{index}"
                     )
-
 
     except Exception as e:
 
